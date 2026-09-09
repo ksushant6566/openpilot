@@ -47,14 +47,16 @@ jobs:
           camera = env.engine.sensors['rgb_road']
           camera.get_cam().reparentTo(env.vehicle.origin)
           camera.get_cam().setPos(0, 0, 1.22)
-          def measure():
+          def measure(check_image=True):
             timings = []
             for _ in range(12):
               start = time.perf_counter()
               env.step([0, 0])
               frame = camera.perceive(to_float=False)
               timings.append((time.perf_counter() - start) * 1000)
-            assert frame.shape == (1208, 1928, 3) and frame.max() > frame.min()
+            assert frame.shape == (1208, 1928, 3)
+            if check_image:
+              assert frame.max() > frame.min()
             return statistics.median(timings[2:]), min(timings[2:]), max(timings[2:])
           baseline = measure()
           engine = env.engine.graphicsEngine
@@ -63,7 +65,15 @@ jobs:
             print('Graphics output:', output.getName(), output.getXSize(), output.getYSize(), output.isActive())
           for output in env.engine.pbrpipe.manager.buffers:
             output.setActive(False)
-          print('Render milliseconds (median, min, max):', 'baseline=', baseline, 'unused main filters disabled=', measure())
+          main_disabled = measure()
+          env.engine.pssm.buffer.setActive(False)
+          shadow_buffer_disabled = measure()
+          env.engine.render.setShaderInput('use_pssm', False)
+          shadow_shader_disabled = measure()
+          env.engine.terrain._mesh_terrain.hide()
+          terrain_hidden = measure(check_image=False)
+          print('Render milliseconds (median, min, max):', 'baseline=', baseline, 'main filters disabled=', main_disabled,
+                'shadow buffer disabled=', shadow_buffer_disabled, 'shadow shader disabled=', shadow_shader_disabled, 'terrain hidden=', terrain_hidden)
           assert baseline[0] < 50, 'Rendering alone exceeds the 20 Hz frame budget'
         finally:
           env.close()
