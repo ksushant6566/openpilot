@@ -1,9 +1,10 @@
 import math
+import os
 import time
 import numpy as np
 
 from collections import namedtuple
-from panda3d.core import Vec3
+from panda3d.core import Vec3, loadPrcFileData
 from multiprocessing.connection import Connection
 
 from metadrive.engine.core.engine_core import EngineCore
@@ -53,6 +54,8 @@ def metadrive_process(dual_camera: bool, config: dict, camera_array, wide_camera
                       exit_event, op_engaged, test_duration, test_run):
   arrive_dest_done = config.pop("arrive_dest_done", True)
   apply_metadrive_patches(arrive_dest_done)
+  if os.getenv("EGL_PLATFORM") == "surfaceless":
+    loadPrcFileData("", "load-display p3headlessgl")
 
   road_image = np.frombuffer(camera_array.get_obj(), dtype=np.uint8).reshape((H, W, 3))
   if dual_camera:

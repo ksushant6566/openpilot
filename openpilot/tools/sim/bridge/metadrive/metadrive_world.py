@@ -50,7 +50,10 @@ class MetaDriveWorld(World):
     print("---- Spawning Metadrive world, this might take awhile ----")
     print("----------------------------------------------------------")
 
-    self.vehicle_last_pos = self.vehicle_state_recv.recv().position # wait for a state message to ensure metadrive is launched
+    while not self.vehicle_state_recv.poll(0.1):
+      if not self.metadrive_process.is_alive():
+        raise RuntimeError(f"MetaDrive exited during startup: {self.metadrive_process.exitcode}")
+    self.vehicle_last_pos = self.vehicle_state_recv.recv().position
     self.status_q.put(QueueMessage(QueueMessageType.START_STATUS, "started"))
 
     self.steer_ratio = 15

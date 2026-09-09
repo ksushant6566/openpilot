@@ -41,7 +41,7 @@ class TestSimBridgeBase(OpenpilotTestCase):
 
     # Wait for bridge to startup
     start_waiting = time.monotonic()
-    while not bridge.started.value and time.monotonic() < start_waiting + max_time_per_step:
+    while p_bridge.is_alive() and not bridge.started.value and time.monotonic() < start_waiting + max_time_per_step:
       time.sleep(0.1)
     assert p_bridge.exitcode is None, f"Bridge process should be running, but exited with code {p_bridge.exitcode}"
     assert bridge.started.value, "Bridge did not start before the deadline"

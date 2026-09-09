@@ -73,7 +73,6 @@ tools = [
 ]
 
 simulator = [
-  "onnx",
   "onnxruntime",
   "setuptools<81",  # MetaDrive still imports pkg_resources
   "metadrive-simulator @ git+https://github.com/commaai/metadrive.git@2716f55a9c7b928ce957a497a15c2c19840c08bc ; platform_machine != 'aarch64'",

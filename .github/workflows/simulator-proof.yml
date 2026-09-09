@@ -26,6 +26,8 @@ jobs:
     - run: ./tools/op.sh setup
     - name: Build
       run: scons -j4
+    - name: Camera and policy history regressions
+      run: python -m unittest openpilot.tools.sim.tests.test_camerad openpilot.tools.sim.tests.test_policy_inputs -v
     - name: Drive for 60 seconds
       timeout-minutes: 7
       env:
