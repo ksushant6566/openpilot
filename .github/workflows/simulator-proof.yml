@@ -47,15 +47,24 @@ jobs:
           camera = env.engine.sensors['rgb_road']
           camera.get_cam().reparentTo(env.vehicle.origin)
           camera.get_cam().setPos(0, 0, 1.22)
-          timings = []
-          for _ in range(12):
-            start = time.perf_counter()
-            env.step([0, 0])
-            frame = camera.perceive(to_float=False)
-            timings.append((time.perf_counter() - start) * 1000)
-          assert frame.shape == (1208, 1928, 3) and frame.max() > frame.min()
-          print(f'Render milliseconds: median={statistics.median(timings[2:]):.2f}, min={min(timings[2:]):.2f}, max={max(timings[2:]):.2f}')
-          assert statistics.median(timings[2:]) < 50, 'Rendering alone exceeds the 20 Hz frame budget'
+          def measure():
+            timings = []
+            for _ in range(12):
+              start = time.perf_counter()
+              env.step([0, 0])
+              frame = camera.perceive(to_float=False)
+              timings.append((time.perf_counter() - start) * 1000)
+            assert frame.shape == (1208, 1928, 3) and frame.max() > frame.min()
+            return statistics.median(timings[2:]), min(timings[2:]), max(timings[2:])
+          baseline = measure()
+          engine = env.engine.graphicsEngine
+          for i in range(engine.getNumWindows()):
+            output = engine.getWindow(i)
+            print('Graphics output:', output.getName(), output.getXSize(), output.getYSize(), output.isActive())
+          for output in env.engine.pbrpipe.manager.buffers:
+            output.setActive(False)
+          print('Render milliseconds (median, min, max):', 'baseline=', baseline, 'unused main filters disabled=', measure())
+          assert baseline[0] < 50, 'Rendering alone exceeds the 20 Hz frame budget'
         finally:
           env.close()
         PY
