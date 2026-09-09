@@ -85,6 +85,7 @@ def metadrive_process(dual_camera: bool, config: dict, camera_array, wide_camera
 
   lane_idx_prev = reset()
   start_time = None
+  engaged_steps = 0
 
   def get_cam_as_rgb(cam):
     cam = env.engine.sensors[cam]
@@ -122,6 +123,7 @@ def metadrive_process(dual_camera: bool, config: dict, camera_array, wide_camera
       if should_reset:
         lane_idx_prev = reset()
         start_time = None
+        engaged_steps = 0
 
     is_engaged = op_engaged.is_set()
     if is_engaged and start_time is None:
@@ -129,6 +131,8 @@ def metadrive_process(dual_camera: bool, config: dict, camera_array, wide_camera
 
     if rk.frame % 5 == 0:
       _, _, terminated, _, _ = env.step(vc)
+      if is_engaged:
+        engaged_steps += 1
       timeout = True if start_time is not None and time.monotonic() - start_time >= test_duration else False
       lane_idx_curr, on_lane = get_current_lane_info(env.vehicle)
       out_of_lane = lane_idx_curr != lane_idx_prev or not on_lane
@@ -140,7 +144,8 @@ def metadrive_process(dual_camera: bool, config: dict, camera_array, wide_camera
         elif out_of_lane:
           done_result = (True, {"out_of_lane" : True})
         elif timeout:
-          done_result = (True, {"timeout" : True})
+          done_result = (True, {"timeout": True, "simulated_seconds": engaged_steps * config["physics_world_step_size"],
+                                "elapsed_seconds": time.monotonic() - start_time})
 
         simulation_state = metadrive_simulation_state(
           running=False,

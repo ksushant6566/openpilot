@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 from tinygrad import Tensor, TinyJit
 
@@ -56,12 +54,12 @@ class Camerad:
 
     self.vipc_server.start_listener()
 
-  def cam_send_yuv_road(self, yuv):
-    self._send_yuv(yuv, self.frame_road_id, 'narrowRoadCameraState', VisionStreamType.VISION_STREAM_NARROW_ROAD)
+  def cam_send_yuv_road(self, yuv, timestamp):
+    self._send_yuv(yuv, self.frame_road_id, 'narrowRoadCameraState', VisionStreamType.VISION_STREAM_NARROW_ROAD, timestamp)
     self.frame_road_id += 1
 
-  def cam_send_yuv_wide_road(self, yuv):
-    self._send_yuv(yuv, self.frame_wide_id, 'wideRoadCameraState', VisionStreamType.VISION_STREAM_WIDE_ROAD)
+  def cam_send_yuv_wide_road(self, yuv, timestamp):
+    self._send_yuv(yuv, self.frame_wide_id, 'wideRoadCameraState', VisionStreamType.VISION_STREAM_WIDE_ROAD, timestamp)
     self.frame_wide_id += 1
 
   def rgb_to_yuv(self, rgb):
@@ -73,8 +71,7 @@ class Camerad:
     self.uv_plane[:] = uv.numpy()
     return self.yuv.tobytes()
 
-  def _send_yuv(self, yuv, frame_id, pub_type, yuv_type):
-    eof = time.monotonic_ns()
+  def _send_yuv(self, yuv, frame_id, pub_type, yuv_type, eof):
     self.vipc_server.send(yuv_type, yuv, frame_id, eof, eof)
 
     dat = messaging.new_message(pub_type, valid=True)

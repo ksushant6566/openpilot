@@ -24,6 +24,18 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - run: ./tools/op.sh setup
+    - name: Headless graphics dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends libegl1 libgl1-mesa-dri
+        python - <<'PY'
+        from panda3d.core import loadPrcFileData
+        loadPrcFileData('', 'load-display p3headlessgl\naudio-library-name null')
+        from direct.showbase.ShowBase import ShowBase
+        base = ShowBase(windowType='offscreen')
+        assert base.win is not None
+        base.destroy()
+        PY
     - name: Build
       run: scons -j4
     - name: Camera and policy history regressions
@@ -33,6 +45,13 @@ jobs:
       env:
         SIM_ARTIFACTS_DIR: ${{ github.workspace }}/sim-artifacts/run-1
       run: python -m unittest openpilot.tools.sim.tests.test_metadrive_bridge -v
+    - name: Required driving artifacts
+      run: |
+        python - <<'PY'
+        from pathlib import Path
+        for name in ('rlog.zst', 'qlog.zst', 'qcamera.ts'):
+          assert any(p.stat().st_size for p in Path('sim-artifacts').rglob(name)), f'Missing nonempty {name}'
+        PY
     - name: Check compact artifact size
       id: artifact_size
       if: always()

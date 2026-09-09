@@ -1,9 +1,10 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
 from openpilot.tools.sim.lib import camerad
+from openpilot.tools.sim.lib.simulated_sensors import SimulatedSensors
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 
 
@@ -23,8 +24,19 @@ class TestCamerad(unittest.TestCase):
         expected[:stride * y_height].reshape(y_height, stride)[:6, :14] = values[0]
         expected[stride * y_height:stride * (y_height + uv_height)].reshape(uv_height, stride)[:3, :14] = np.tile(values[1:], 7)
         self.assertEqual(camera.rgb_to_yuv(frame), expected.tobytes())
-      with patch.object(camerad.time, 'monotonic_ns', return_value=123456789):
-        camera.cam_send_yuv_road(expected.tobytes())
+      camera.cam_send_yuv_road(expected.tobytes(), 123456789)
       self.assertEqual(camera.vipc_server.send.call_args.args[2:], (0, 123456789, 123456789))
       state = camera.pm.send.call_args.args[1].narrowRoadCameraState
       self.assertEqual((state.frameId, state.timestampSof, state.timestampEof), (0, 123456789, 123456789))
+
+  def test_camera_pair_shares_capture_time(self):
+    sensors = SimulatedSensors.__new__(SimulatedSensors)
+    sensors.camerad = MagicMock()
+    with patch('openpilot.tools.sim.lib.simulated_sensors.time.monotonic_ns', side_effect=[1000, 15001000, 30001000]) as clock:
+      def convert(image):
+        clock()  # Each conversion takes 15 ms; both exposures still describe the same simulation step.
+        return b'frame'
+      sensors.camerad.rgb_to_yuv.side_effect = convert
+      sensors.send_camera_images(MagicMock(dual_camera=True))
+    sensors.camerad.cam_send_yuv_road.assert_called_once_with(b'frame', 1000)
+    sensors.camerad.cam_send_yuv_wide_road.assert_called_once_with(b'frame', 1000)

@@ -31,7 +31,8 @@ class TestSimBridgeBase(OpenpilotTestCase):
     p_manager = subprocess.Popen("./launch_openpilot.sh", cwd=SIM_DIR, start_new_session=True)
     self.processes.append(p_manager)
 
-    sm = messaging.SubMaster(['selfdriveState', 'onroadEvents', 'managerState'])
+    camera_services = ['modelV2', 'narrowRoadCameraState']
+    sm = messaging.SubMaster(['selfdriveState', 'onroadEvents', 'managerState', *camera_services])
     q = Queue()
     bridge = self.create_bridge()
     p_bridge = bridge.run(q, retries=10)
@@ -70,7 +71,7 @@ class TestSimBridgeBase(OpenpilotTestCase):
     while time.monotonic() < start_time + max_time_per_step:
       sm.update(100)
 
-      if sm.all_alive() and sm['selfdriveState'].active:
+      if sm.updated['selfdriveState'] and sm['selfdriveState'].active:
         control_active += 1
 
         if control_active == min_counts_control_active:
@@ -78,12 +79,23 @@ class TestSimBridgeBase(OpenpilotTestCase):
 
     assert min_counts_control_active == control_active, f"Simulator did not engage a minimal of {min_counts_control_active} steps was {control_active}"
 
-    deadline = time.monotonic() + self.test_duration + 15
+    start_driving = time.monotonic()
+    observed_frames = {s: set() for s in camera_services}
+    deadline = start_driving + self.test_duration + 15
     while bridge.started.value and time.monotonic() < deadline:
       sm.update(100)
+      for s in ['selfdriveState', *camera_services]:
+        assert time.monotonic() - sm.logMonoTime[s] / 1e9 < 1, f"{s} stopped publishing while driving"
+      for s in camera_services:
+        if sm.updated[s]:
+          assert time.monotonic() - sm[s].timestampEof / 1e9 < 1, f"{s} is using stale camera frames"
+          observed_frames[s].add(sm[s].frameId)
       if sm.updated['selfdriveState']:
         assert sm['selfdriveState'].active, "openpilot disengaged while driving"
     assert not bridge.started.value, "Simulation failed to terminate before the deadline"
+    observed_seconds = time.monotonic() - start_driving
+    for s, frames in observed_frames.items():
+      assert len(frames) >= 20 * (observed_seconds - 1), f"{s}: {len(frames)} unique frames in {observed_seconds:.2f}s"
 
     done_info = None
     while True:
@@ -96,6 +108,9 @@ class TestSimBridgeBase(OpenpilotTestCase):
         break
     assert done_info is not None, "Simulator exited without reporting its result"
     assert done_info.get("timeout"), f"Simulator ended before the driving duration elapsed: {done_info}"
+    simulated, elapsed = done_info.pop('simulated_seconds'), done_info.pop('elapsed_seconds')
+    assert abs(simulated - elapsed) < 1, f"Simulation is not realtime: {simulated:.2f}s simulated in {elapsed:.2f}s"
+    print(f"Driving timing: {simulated=:.2f}s, {elapsed=:.2f}s, {observed_seconds=:.2f}s, frames={ {s: len(f) for s, f in observed_frames.items()} }")
     failure_states = [name for name, failed in done_info.items() if name != "timeout" and failed]
     assert len(failure_states) == 0, f"Simulator fails to finish a loop. Failure states: {failure_states}"
 
