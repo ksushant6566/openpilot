@@ -1,0 +1,49 @@
+name: simulator proof
+on:
+  push:
+    branches: [codex/metadrive-ci]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  driving:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CI: '1'
+      DEV: CPU:LLVM
+      SIMULATION_ONNX: '1'
+      EGL_PLATFORM: surfaceless
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      LP_NUM_THREADS: '2'
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: lfs.fetchexclude
+      GIT_CONFIG_VALUE_0: openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx
+    steps:
+    - uses: actions/checkout@v7
+    - run: ./tools/op.sh setup
+    - name: Build
+      run: scons -j4
+    - name: Drive for 60 seconds
+      timeout-minutes: 7
+      env:
+        SIM_ARTIFACTS_DIR: ${{ github.workspace }}/sim-artifacts/run-1
+      run: python -m unittest openpilot.tools.sim.tests.test_metadrive_bridge -v
+    - name: Check compact artifact size
+      id: artifact_size
+      if: always()
+      run: |
+        python - <<'PY'
+        from pathlib import Path
+        size = sum(p.stat().st_size for p in Path('sim-artifacts').rglob('*') if p.is_file())
+        assert size <= 15 * 1024**2, f'Proof artifact exceeds 15 MiB: {size}'
+        PY
+    - uses: actions/upload-artifact@v7
+      if: always() && steps.artifact_size.outcome != 'failure'
+      with:
+        name: simulator-logs
+        path: sim-artifacts
+        retention-days: 1
+        if-no-files-found: warn

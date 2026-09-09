@@ -20,6 +20,7 @@ from msgq.visionipc import VisionIpcClient, VisionBuf
 from opendbc.car.car_helpers import get_demo_car_params
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
+from openpilot.common.hardware import PC
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
@@ -175,7 +176,11 @@ class ModelState:
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
   def __init__(self, cam_w: int, cam_h: int, chestnut: bool):
-    jits = load_oob(open_file_chunked(modeld_pkl_path(chestnut)))
+    if PC and not chestnut and os.getenv('SIMULATION') == '1' and os.getenv('SIMULATION_ONNX') == '1':
+      from openpilot.tools.sim.lib.model import load_sim_model
+      jits = load_sim_model(cam_w, cam_h)
+    else:
+      jits = load_oob(open_file_chunked(modeld_pkl_path(chestnut)))
     input_devices = jits['input_devices']
     self.model_device = input_devices['model']
     metadata = jits['metadata']

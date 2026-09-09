@@ -1,13 +1,18 @@
 import os
+import queue
+import signal
+import shutil
 import subprocess
 import time
 import unittest
 
 from multiprocessing import Queue
+from pathlib import Path
 
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.cereal import messaging
 from openpilot.common.basedir import BASEDIR
+from openpilot.common.hardware.hw import Paths
 from openpilot.tools.sim.bridge.common import QueueMessageType
 
 SIM_DIR = os.path.join(BASEDIR, "openpilot/tools/sim")
@@ -21,10 +26,9 @@ class TestSimBridgeBase(OpenpilotTestCase):
   def setup_method(self):
     self.processes = []
 
-  @unittest.skip("TODO: re-enable simulator bridge test")
   def test_driving(self):
     # Startup manager and bridge.py. Check processes are running, then engage and verify.
-    p_manager = subprocess.Popen("./launch_openpilot.sh", cwd=SIM_DIR)
+    p_manager = subprocess.Popen("./launch_openpilot.sh", cwd=SIM_DIR, start_new_session=True)
     self.processes.append(p_manager)
 
     sm = messaging.SubMaster(['selfdriveState', 'onroadEvents', 'managerState'])
@@ -33,20 +37,21 @@ class TestSimBridgeBase(OpenpilotTestCase):
     p_bridge = bridge.run(q, retries=10)
     self.processes.append(p_bridge)
 
-    max_time_per_step = 60
+    max_time_per_step = 120
 
     # Wait for bridge to startup
     start_waiting = time.monotonic()
     while not bridge.started.value and time.monotonic() < start_waiting + max_time_per_step:
       time.sleep(0.1)
     assert p_bridge.exitcode is None, f"Bridge process should be running, but exited with code {p_bridge.exitcode}"
+    assert bridge.started.value, "Bridge did not start before the deadline"
 
     start_time = time.monotonic()
     no_car_events_issues_once = False
     car_event_issues = []
     not_running = []
     while time.monotonic() < start_time + max_time_per_step:
-      sm.update()
+      sm.update(100)
 
       not_running = [p.name for p in sm['managerState'].processes if not p.running and p.shouldBeRunning]
       car_event_issues = [event.name for event in sm['onroadEvents'] if any([event.noEntry, event.softDisable, event.immediateDisable])]
@@ -63,7 +68,7 @@ class TestSimBridgeBase(OpenpilotTestCase):
     control_active = 0
 
     while time.monotonic() < start_time + max_time_per_step:
-      sm.update()
+      sm.update(100)
 
       if sm.all_alive() and sm['selfdriveState'].active:
         control_active += 1
@@ -73,16 +78,25 @@ class TestSimBridgeBase(OpenpilotTestCase):
 
     assert min_counts_control_active == control_active, f"Simulator did not engage a minimal of {min_counts_control_active} steps was {control_active}"
 
-    failure_states = []
-    while bridge.started.value:
-      continue
+    deadline = time.monotonic() + self.test_duration + 15
+    while bridge.started.value and time.monotonic() < deadline:
+      sm.update(100)
+      if sm.updated['selfdriveState']:
+        assert sm['selfdriveState'].active, "openpilot disengaged while driving"
+    assert not bridge.started.value, "Simulation failed to terminate before the deadline"
 
-    while not q.empty():
-      state = q.get()
+    done_info = None
+    while True:
+      try:
+        state = q.get(timeout=1)
+      except queue.Empty:
+        break
       if state.type == QueueMessageType.TERMINATION_INFO:
         done_info = state.info
-        failure_states = [done_state for done_state in done_info if done_state != "timeout" and done_info[done_state]]
         break
+    assert done_info is not None, "Simulator exited without reporting its result"
+    assert done_info.get("timeout"), f"Simulator ended before the driving duration elapsed: {done_info}"
+    failure_states = [name for name, failed in done_info.items() if name != "timeout" and failed]
     assert len(failure_states) == 0, f"Simulator fails to finish a loop. Failure states: {failure_states}"
 
   def teardown_method(self):
@@ -91,4 +105,22 @@ class TestSimBridgeBase(OpenpilotTestCase):
       p.terminate()
 
     for p in reversed(self.processes):
-      p.kill()
+      if isinstance(p, subprocess.Popen):
+        try:
+          p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+          os.killpg(p.pid, signal.SIGKILL)
+          p.wait()
+      else:
+        p.join(timeout=10)
+        if p.is_alive():
+          p.kill()
+          p.join()
+
+    if destination := os.getenv("SIM_ARTIFACTS_DIR"):
+      root = Path(Paths.log_root())
+      for name in ("rlog.zst", "qlog.zst", "qcamera.ts"):
+        for src in root.rglob(name):
+          target = Path(destination) / src.relative_to(root)
+          target.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(src, target)

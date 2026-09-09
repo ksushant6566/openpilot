@@ -182,13 +182,12 @@ def make_warp(nv12, model_w, model_h):
   return warp
 
 
-def make_run_policy(model_runner, model_metadata, frame_skip):
+def make_policy_inputs(input_shapes, frame_skip, input_dtypes):
   sample_desire_fn = partial(sample_desire, frame_skip=frame_skip)
   sample_skip_fn = partial(sample_skip, frame_skip=frame_skip)
-  npy_shapes, npy_sizes = get_policy_npy_shapes(model_metadata['input_shapes'])
-  model_input_dtypes = {name: spec.dtype for name, spec in model_runner.graph_inputs.items()}
+  npy_shapes, npy_sizes = get_policy_npy_shapes(input_shapes)
 
-  def run_policy(warped, img_q, big_img_q, feat_q, desire_q, packed_npy_inputs):
+  def prepare_inputs(warped, img_q, big_img_q, feat_q, desire_q, packed_npy_inputs):
     packed_npy_inputs = packed_npy_inputs.to(Device.DEFAULT)
     Tensor.realize(packed_npy_inputs, warped)
 
@@ -202,13 +201,21 @@ def make_run_policy(model_runner, model_metadata, frame_skip):
     inputs = {
       'img': img,
       'big_img': big_img,
-      'features_buffer': feat_buf.reshape(model_metadata['input_shapes']['features_buffer']),
+      'features_buffer': feat_buf.reshape(input_shapes['features_buffer']),
       'desire_pulse': desire_buf,
       'traffic_convention': traffic_convention,
       'action_t': action_t,
     }
-    inputs = {name: value.cast(model_input_dtypes[name]) for name, value in inputs.items()}
-    out = next(iter(model_runner(inputs).values())).cast('float32')
+    return {name: value.cast(input_dtypes[name]) for name, value in inputs.items()}
+  return prepare_inputs
+
+
+def make_run_policy(model_runner, model_metadata, frame_skip):
+  prepare_inputs = make_policy_inputs(model_metadata['input_shapes'], frame_skip,
+                                      {name: spec.dtype for name, spec in model_runner.graph_inputs.items()})
+
+  def run_policy(*args):
+    out = next(iter(model_runner(prepare_inputs(*args)).values())).cast('float32')
     return out,
   return run_policy
 

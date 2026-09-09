@@ -1,22 +1,26 @@
+import time
+
 import numpy as np
+from tinygrad import Tensor, TinyJit
 
 from openpilot.cereal.visionipc import VisionStreamType
 from msgq.visionipc import VisionIpcServer
 from openpilot.cereal import messaging
 
 from openpilot.tools.sim.lib.common import W, H
+from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 
 
 def rgb_to_nv12(rgb):
-  """Convert RGB image to NV12 (YUV420) format using BT.601 coefficients."""
+  """Convert an RGB Tensor to Y and interleaved UV planes using BT.601 coefficients."""
   h, w = rgb.shape[:2]
-  r = rgb[:, :, 0].astype(np.int32)
-  g = rgb[:, :, 1].astype(np.int32)
-  b = rgb[:, :, 2].astype(np.int32)
+  r = rgb[:, :, 0].cast('int32')
+  g = rgb[:, :, 1].cast('int32')
+  b = rgb[:, :, 2].cast('int32')
 
   # Y plane - BT.601 coefficients (matches original OpenCL kernel)
   y = (((b * 13 + g * 65 + r * 33) + 64) >> 7) + 16
-  y = np.clip(y, 0, 255).astype(np.uint8)
+  y = y.clip(0, 255).cast('uint8')
 
   # Subsample RGB for UV (2x2 box filter)
   r_sub = (r[0::2, 0::2] + r[0::2, 1::2] + r[1::2, 0::2] + r[1::2, 1::2] + 2) >> 2
@@ -24,15 +28,12 @@ def rgb_to_nv12(rgb):
   b_sub = (b[0::2, 0::2] + b[0::2, 1::2] + b[1::2, 0::2] + b[1::2, 1::2] + 2) >> 2
 
   # U and V planes
-  u = np.clip((b_sub * 56 - g_sub * 37 - r_sub * 19 + 0x8080) >> 8, 0, 255).astype(np.uint8)
-  v = np.clip((r_sub * 56 - g_sub * 47 - b_sub * 9 + 0x8080) >> 8, 0, 255).astype(np.uint8)
+  u = ((b_sub * 56 - g_sub * 37 - r_sub * 19 + 0x8080) >> 8).clip(0, 255).cast('uint8')
+  v = ((r_sub * 56 - g_sub * 47 - b_sub * 9 + 0x8080) >> 8).clip(0, 255).cast('uint8')
 
   # Interleave UV for NV12 format
-  uv = np.empty((h // 2, w), dtype=np.uint8)
-  uv[:, 0::2] = u
-  uv[:, 1::2] = v
-
-  return np.concatenate([y.ravel(), uv.ravel()]).tobytes()
+  uv = u.stack(v, dim=-1).reshape(h // 2, w)
+  return y.realize(), uv.realize()
 
 
 class Camerad:
@@ -43,10 +44,15 @@ class Camerad:
     self.frame_road_id = 0
     self.frame_wide_id = 0
     self.vipc_server = VisionIpcServer("camerad")
+    self.convert = TinyJit(rgb_to_nv12)
 
-    self.vipc_server.create_buffers(VisionStreamType.VISION_STREAM_NARROW_ROAD, 5, W, H)
+    stride, y_height, uv_height, size = get_nv12_info(W, H)
+    self.yuv = np.zeros(size, dtype=np.uint8)
+    self.y_plane = self.yuv[:stride * y_height].reshape(y_height, stride)[:H, :W]
+    self.uv_plane = self.yuv[stride * y_height:stride * (y_height + uv_height)].reshape(uv_height, stride)[:H // 2, :W]
+    self.vipc_server.create_buffers_with_sizes(VisionStreamType.VISION_STREAM_NARROW_ROAD, 5, W, H, size, stride, stride * y_height)
     if dual_camera:
-      self.vipc_server.create_buffers(VisionStreamType.VISION_STREAM_WIDE_ROAD, 5, W, H)
+      self.vipc_server.create_buffers_with_sizes(VisionStreamType.VISION_STREAM_WIDE_ROAD, 5, W, H, size, stride, stride * y_height)
 
     self.vipc_server.start_listener()
 
@@ -62,15 +68,20 @@ class Camerad:
     """Convert RGB to NV12 YUV format."""
     assert rgb.shape == (H, W, 3), f"{rgb.shape}"
     assert rgb.dtype == np.uint8
-    return rgb_to_nv12(rgb)
+    y, uv = self.convert(Tensor(rgb, device='CPU'))
+    self.y_plane[:] = y.numpy()
+    self.uv_plane[:] = uv.numpy()
+    return self.yuv.tobytes()
 
   def _send_yuv(self, yuv, frame_id, pub_type, yuv_type):
-    eof = int(frame_id * 0.05 * 1e9)
+    eof = time.monotonic_ns()
     self.vipc_server.send(yuv_type, yuv, frame_id, eof, eof)
 
     dat = messaging.new_message(pub_type, valid=True)
     msg = {
       "frameId": frame_id,
+      "timestampSof": eof,
+      "timestampEof": eof,
       "transform": [1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
                     0.0, 0.0, 1.0]
