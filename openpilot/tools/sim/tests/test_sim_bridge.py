@@ -65,19 +65,11 @@ class TestSimBridgeBase(OpenpilotTestCase):
                     f"Failed because no messages received, or CarEvents '{car_event_issues}' or processes not running '{not_running}'"
 
     start_time = time.monotonic()
-    min_counts_control_active = 100
-    control_active = 0
-
     while time.monotonic() < start_time + max_time_per_step:
       sm.update(100)
-
       if sm.updated['selfdriveState'] and sm['selfdriveState'].active:
-        control_active += 1
-
-        if control_active == min_counts_control_active:
-          break
-
-    assert min_counts_control_active == control_active, f"Simulator did not engage a minimal of {min_counts_control_active} steps was {control_active}"
+        break
+    assert sm['selfdriveState'].active, "Simulator did not engage"
 
     start_driving = time.monotonic()
     observed_frames = {s: set() for s in camera_services}
@@ -94,6 +86,7 @@ class TestSimBridgeBase(OpenpilotTestCase):
         assert sm['selfdriveState'].active, "openpilot disengaged while driving"
     assert not bridge.started.value, "Simulation failed to terminate before the deadline"
     observed_seconds = time.monotonic() - start_driving
+    assert observed_seconds >= self.test_duration - 1, f"Only observed {observed_seconds:.2f}s of active driving"
     for s, frames in observed_frames.items():
       assert len(frames) >= 20 * (observed_seconds - 1), f"{s}: {len(frames)} unique frames in {observed_seconds:.2f}s"
 

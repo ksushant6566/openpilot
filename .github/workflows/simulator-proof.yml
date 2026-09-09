@@ -29,12 +29,32 @@ jobs:
         sudo apt-get update -qq
         sudo apt-get install -y --no-install-recommends libegl1 libgl1-mesa-dri
         python - <<'PY'
+        import statistics
+        import time
         from panda3d.core import loadPrcFileData
         loadPrcFileData('', 'load-display p3headlessgl\naudio-library-name null')
-        from direct.showbase.ShowBase import ShowBase
-        base = ShowBase(windowType='offscreen')
-        assert base.win is not None
-        base.destroy()
+        from metadrive.envs.metadrive_env import MetaDriveEnv
+        from openpilot.tools.sim.bridge.metadrive.metadrive_common import RGBCameraRoad, configure_software_rendering
+        configure_software_rendering()
+        env = MetaDriveEnv({'image_observation': True, 'image_on_cuda': False, 'traffic_density': 0,
+                           'vehicle_config': {'image_source': 'rgb_road'}, 'sensors': {'rgb_road': (RGBCameraRoad, 1928, 1208)},
+                           'preload_models': False, 'show_logo': False, 'map': 'S'})
+        try:
+          env.reset()
+          camera = env.engine.sensors['rgb_road']
+          camera.get_cam().reparentTo(env.vehicle.origin)
+          camera.get_cam().setPos(0, 0, 1.22)
+          timings = []
+          for _ in range(12):
+            start = time.perf_counter()
+            env.step([0, 0])
+            frame = camera.perceive(to_float=False)
+            timings.append((time.perf_counter() - start) * 1000)
+          assert frame.shape == (1208, 1928, 3) and frame.max() > frame.min()
+          print(f'Render milliseconds: median={statistics.median(timings[2:]):.2f}, min={min(timings[2:]):.2f}, max={max(timings[2:]):.2f}')
+          assert statistics.median(timings[2:]) < 50, 'Rendering alone exceeds the20Hz frame budget'
+        finally:
+          env.close()
         PY
     - name: Build
       run: scons -j4

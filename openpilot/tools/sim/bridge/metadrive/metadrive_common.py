@@ -1,7 +1,16 @@
+import os
 import numpy as np
 
 from metadrive.component.sensors.rgb_camera import RGBCamera
-from panda3d.core import Texture, GraphicsOutput
+from panda3d.core import Texture, GraphicsOutput, loadPrcFileData
+
+
+def configure_software_rendering():
+  from metadrive.engine.core import engine_core
+  from metadrive.third_party.simplepbr import init
+  # The main view is unused; llvmpipe cannot allocate MetaDrive's 16-sample HDR buffer.
+  engine_core.init = lambda **kwargs: init(**{**kwargs, 'msaa_samples': 0})
+  loadPrcFileData('', 'framebuffer-multisample 0\nmultisamples 0')
 
 
 class CopyRamRGBCamera(RGBCamera):
@@ -10,6 +19,16 @@ class CopyRamRGBCamera(RGBCamera):
     super().__init__(*args, **kwargs)
     self.cpu_texture = Texture()
     self.buffer.addRenderTexture(self.cpu_texture, GraphicsOutput.RTMCopyRam)
+
+  def _setup_effect(self):
+    if os.getenv('LIBGL_ALWAYS_SOFTWARE') != '1':
+      return super()._setup_effect()
+    # Render directly into RGB8 on CPU, keeping the road/lane texture shader.
+    from metadrive.constants import CameraTagStateKey, Semantics
+    from metadrive.engine.core.terrain import Terrain
+    cam = self.get_cam().node()
+    cam.setTagStateKey(CameraTagStateKey.RGB)
+    cam.setTagState(Semantics.TERRAIN.label, Terrain.make_render_state(self.engine, 'terrain.vert.glsl', 'terrain.frag.glsl'))
 
   def get_rgb_array_cpu(self):
     origin_img = self.cpu_texture
